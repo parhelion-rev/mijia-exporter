@@ -75,7 +75,10 @@ jobs:
             echo "完整变更记录见 [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)。"
           } >> release-notes.md
 
-      - name: 创建 GitHub Release
+      - name: 创建或更新 GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+        run: |
+          # 幂等：重推同一个标签时更新已有 Release，而不是报"已存在"而失败
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md \
+            || gh release edit "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md
