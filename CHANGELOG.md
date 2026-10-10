@@ -7,7 +7,7 @@
 > 1.0.0 是首个公开发布版本。下面的「变更」与「修复」记录的是发布前开发过程中相对早期内部版本的变化，
 > 保留下来是为了说明现状是怎么来的，并非相对上一个公开版本的差异。
 
-## [Unreleased]
+## [1.0.3] - 2026-10-11
 
 ### 修复
 
@@ -88,3 +88,4 @@
 [1.0.0]: https://github.com/parhelion-rev/mijia-exporter/releases/tag/v1.0.0
 [1.0.1]: https://github.com/parhelion-rev/mijia-exporter/releases/tag/v1.0.1
 [1.0.2]: https://github.com/parhelion-rev/mijia-exporter/releases/tag/v1.0.2
+[1.0.3]: https://github.com/parhelion-rev/mijia-exporter/releases/tag/v1.0.3

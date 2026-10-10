@@ -35,7 +35,7 @@ jobs:
           chmod 644 "$cfg"
           docker run --rm -d --name mijia-ci -p 19101:9101 \
             -v "$cfg:/app/config.yaml:ro" \
-            mijia-exporter:1.0.2
+            mijia-exporter:1.0.3
           ok=0
           for i in $(seq 1 20); do
             if curl -sf http://127.0.0.1:19101/ready >/dev/null 2>&1; then ok=1; break; fi

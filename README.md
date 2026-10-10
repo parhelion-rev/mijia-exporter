@@ -33,7 +33,7 @@ make up        # 启动 exporter + Prometheus + Grafana
 | exporter | `http://<本机IP>:9101/` | 索引页列出每台设备的发现来源与状态 |
 
 - **端口冲突**：3000 / 9090 都是热门端口（例如 NapCat 就占 3000）。在 `.env` 里改 `GRAFANA_PORT` / `PROMETHEUS_PORT` / `EXPORTER_PORT` 即可，容器内部端口不用动。
-- **不想本地构建**：镜像已发布在 Docker Hub（`linux/amd64` + `linux/arm64`）。在 `.env` 里写 `MIJIA_IMAGE=effectwei/mijia-exporter:1.0.2`，然后 `docker compose pull && docker compose up -d --no-build`。
+- **不想本地构建**：镜像已发布在 Docker Hub（`linux/amd64` + `linux/arm64`）。在 `.env` 里写 `MIJIA_IMAGE=effectwei/mijia-exporter:1.0.3`，然后 `docker compose pull && docker compose up -d --no-build`。
 - **不加扫码工具也行**：`make token` 会在终端打印二维码；加 `ARGS="--qr-image qr.png"` 则存成图片再扫。
 
 ## 为什么用 Prometheus + Grafana
@@ -419,9 +419,9 @@ mijia-exporter/
 ```bash
 # 1. 更新 exporter/mijia_exporter.py 里的 VERSION 与 CHANGELOG.md
 # 2. 跑完整测试并打标签
-make release-tag VERSION=1.0.3
+make release-tag VERSION=1.0.4
 # 3. 推送标签，GitHub Actions 会自动多架构构建、推 Docker Hub、创建 Release
-git push origin main && git push origin v1.0.3
+git push origin main && git push origin v1.0.4
 ```
 
 需要在仓库的 **Settings → Secrets and variables → Actions** 里配置 `DOCKERHUB_USERNAME` 与
