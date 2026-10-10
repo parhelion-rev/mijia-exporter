@@ -113,10 +113,16 @@ test-rules:
 			test rules /p/tests/mijia.rules.test.yml; \
 	fi
 
+# 静态校验。注意 exporter/config.yaml 是本地文件（已 gitignore），新克隆的仓库里没有，
+# 所以它只在存在时校验 —— 否则 CI 与首次 clone 这一步会直接"文件不存在"失败。
 validate:
-	$(PYTHON) -c "import json, yaml; \
+	$(PYTHON) -c "import json, pathlib, yaml; \
 json.load(open('grafana/dashboards/mijia.json')); \
-[yaml.safe_load(open(f)) for f in ['docker-compose.yml','prometheus/prometheus.yml','prometheus/rules/mijia.rules.yml','exporter/config.example.yaml','exporter/config.yaml','grafana/provisioning/datasources/prometheus.yml','grafana/provisioning/dashboards/dashboards.yml','.github/workflows/ci.yml','.github/workflows/release.yml']]; \
+required = ['docker-compose.yml','prometheus/prometheus.yml','prometheus/rules/mijia.rules.yml','exporter/config.example.yaml','grafana/provisioning/datasources/prometheus.yml','grafana/provisioning/dashboards/dashboards.yml','.github/workflows/ci.yml','.github/workflows/release.yml']; \
+optional = ['exporter/config.yaml']; \
+missing = [f for f in required if not pathlib.Path(f).is_file()]; \
+assert not missing, f'缺少必要文件：{missing}'; \
+[yaml.safe_load(open(f)) for f in required + [f for f in optional if pathlib.Path(f).is_file()]]; \
 print('YAML / JSON 全部通过')"
 
 # ------------------------------------------------------------------ 发布（维护者）

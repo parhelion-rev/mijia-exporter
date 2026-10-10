@@ -56,7 +56,26 @@ jobs:
             org.opencontainers.image.source=https://github.com/parhelion-rev/mijia-exporter
             org.opencontainers.image.documentation=https://github.com/parhelion-rev/mijia-exporter#readme
 
+      - name: 生成发布说明（取 CHANGELOG 里对应版本的一节）
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            $0 ~ "^## \\[" ver "\\]" {found=1; next}
+            found && (/^## \[/ || /^\[[0-9]+\.[0-9]+\.[0-9]+\]:/) {exit}
+            found {print}
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "CHANGELOG.md 里没有 $version 这一节，请手动补充发布说明。" > release-notes.md
+          fi
+          {
+            echo
+            echo "---"
+            echo "镜像：\`docker pull effectwei/mijia-exporter:${version}\`（linux/amd64 + linux/arm64）"
+            echo
+            echo "完整变更记录见 [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)。"
+          } >> release-notes.md
+
       - name: 创建 GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md
