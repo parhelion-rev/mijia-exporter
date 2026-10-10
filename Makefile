@@ -1,6 +1,6 @@
 COMPOSE ?= docker compose
 PYTHON ?= python3
-VERSION ?= 1.0.0
+VERSION ?= 1.0.1
 IMAGE ?= mijia-exporter:$(VERSION)
 PROM_IMAGE ?= prom/prometheus:v3.13.4
 # 发布目标用：Docker Hub 命名空间与目标架构
