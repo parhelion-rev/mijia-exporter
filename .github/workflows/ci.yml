@@ -52,5 +52,7 @@ jobs:
 
       - name: 配置静态校验
         run: |
-          python3 -m pip install --quiet pyyaml
+          # runner 的 Python 受 PEP 668 保护，pip 直接装会被拒；用发行版包最省事
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-yaml
           make validate
