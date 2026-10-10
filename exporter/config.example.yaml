@@ -47,6 +47,9 @@ devices:
       voltage: {scale: 0.1}
       electric-current: {scale: 0.01}
       power-consumption: {scale: 0.01}
+      # 阈值/门限默认按属性名单独成族（如 mijia_volts_limit），不会混进电压曲线。
+      # 判断错了可以纠正：确属测量值的用 limit: false；名字看不出是门限的用 limit: true。
+      overvoltage-alarm: {scale: 1, limit: true}
 
   # ---------------------------------------------------------------- 云端读取
   # 设备不在同一网段、或拿不到本地 token 时用。需要米家登录态：

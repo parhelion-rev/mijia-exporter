@@ -87,6 +87,18 @@ NAME_UNIT_HINTS: list[tuple[str, str, bool]] = [
     ("duration", "seconds", False),
 ]
 
+# 名字里带这些词的是「阈值 / 告警门限 / 上下限」，不是测量值。
+# 规格常常不给它们单位，于是会走 NAME_UNIT_HINTS 按名字推断出 volt/ampere，
+# 结果就是「过压门限 265」被当成电压、和真实电压挤进同一个指标族、被画进同一张图。
+# 实测正泰 ZTY2002 的 overcurrent-alarm / overvoltage-alarm / undervoltage-alarm 都是这样。
+LIMIT_HINTS = ("alarm", "limit", "threshold", "protect", "upper", "lower", "max", "min")
+
+
+def is_limit(name: str) -> bool:
+    """按属性名判断是否为阈值类属性（可用 overrides 的 limit 字段覆盖）。"""
+    key = (name or "").strip().lower()
+    return any(token in key for token in LIMIT_HINTS)
+
 # 这些单位天然是「累计量」，指标名要加 _total，查询时用 increase()/rate()
 CUMULATIVE_UNITS = {"kwh", "kilowatt_hours", "wh", "watt_hours"}
 # 名字里带这些词的也算累计量（有些规格不给单位）
@@ -176,6 +188,7 @@ class Property:
     metric_override: str = ""
     cumulative_override: bool | None = None
     scale_override: float | None = None
+    limit_override: bool | None = None
 
     @property
     def key(self) -> str:
@@ -192,10 +205,22 @@ class Property:
         return slug_label(self.name) if self.name else self.address
 
     @property
+    def limit(self) -> bool:
+        """是否阈值类属性（门限/告警值）。显式 overrides.limit 优先于名字推断。"""
+        if self.limit_override is not None:
+            return self.limit_override
+        return is_limit(self.name)
+
+    @property
     def family(self) -> str:
         if self.metric_override:
             return sanitize(self.metric_override)
-        return metric_family(self.unit, self.fmt, self.name or self.address)[0]
+        base = metric_family(self.unit, self.fmt, self.name or self.address)[0]
+        # 阈值单独成族：mijia_volts（测量）/ mijia_volts_limit（门限），
+        # 这样按单位画图的面板不会把「过压门限 265 V」和真实电压画在一起。
+        if self.limit:
+            return f"{base}_limit"
+        return base
 
     @property
     def cumulative(self) -> bool:

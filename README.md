@@ -61,9 +61,15 @@ make up        # 启动 exporter + Prometheus + Grafana
 | 无单位 + `bool` | `mijia_state` | 1 / 0 |
 | 无单位 + 数值 | `mijia_value` | 阈值、档位、故障码等 |
 | 没见过的单位 | `mijia_<单位 slug>` | 如 `mg/m3` → `mijia_milligrams_per_cubic_meter` |
+| 阈值类属性（名字含 `alarm` / `limit` / `threshold` / `max` / `min` 等） | `mijia_<单位族>_limit` | 如 `mijia_volts_limit`、`mijia_amperes_limit`，与测量值分开 |
 
 单位缺失时按**属性名**兜底推断（`Voltage` → volts，`Power Consumption` → kWh 且按累计量处理）。
 这层兜底是必需的：实测同一台插座的规格里，`power-consumption` 的单位写成 `none`、`voltage` 写成 `-`。
+
+**阈值为什么单独成族**：规格常常不给门限属性单位。实测正泰 ZTY2002 的 `overvoltage-alarm`（过压门限 265）
+与 `undervoltage-alarm`、`overcurrent-alarm`（过流门限 80）都没有单位，只有名字里含 voltage/current，
+于是会被推断成伏特/安培、和真实测量值挤进同一族——Grafana 就会把「门限」画进电压曲线。
+现在按名字把它们分到 `_limit` 族，测量曲线保持干净；判断错了可以用 `overrides.limit` 双向纠正。
 
 ### 设备级指标
 
@@ -116,6 +122,7 @@ devices:
 | `name` | 改 `property` 标签 |
 | `unit` / `format` | 覆盖规格里的单位与格式 |
 | `cumulative` | 强制或取消按累计量处理（决定是否加 `_total` 后缀） |
+| `limit` | 强制/取消按阈值处理（阈值单独成族，如 `mijia_volts_limit`）；`metric` 优先级最高 |
 | `ignore` | 丢弃该属性（也可写在设备级 `ignore: [a, b]`） |
 
 ### 属性发现

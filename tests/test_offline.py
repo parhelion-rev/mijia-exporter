@@ -125,6 +125,33 @@ class TestNaming(unittest.TestCase):
             with self.subTest(unit=unit, name=name):
                 self.assertEqual(Property(1, 1, name, fmt, unit).metric_name, expected)
 
+    def test_limit_properties_get_their_own_family(self):
+        """阈值/门限不能和测量值同族，否则面板会把「过压门限 265 V」画进电压曲线。
+
+        实测正泰 ZTY2002：规格对 overcurrent-alarm / overvoltage-alarm / undervoltage-alarm
+        都没给单位，只有名字里含 current/voltage，于是曾被推断成 ampere/volt 混进测量族。
+        """
+        self.assertEqual(Property(4, 7, "overvoltage-alarm", "uint16", "").metric_name, "mijia_volts_limit")
+        self.assertEqual(Property(4, 9, "undervoltage-alarm", "uint16", "").metric_name, "mijia_volts_limit")
+        self.assertEqual(Property(4, 5, "overcurrent-alarm", "uint8", "").metric_name, "mijia_amperes_limit")
+        self.assertEqual(Property(5, 2, "power-threshold", "uint32", "watt").metric_name, "mijia_watts_limit")
+        # 带单位的阈值同样分族
+        self.assertEqual(Property(3, 3, "voltage-limit", "uint16", "volt").metric_name, "mijia_volts_limit")
+        # 正常测量值不受影响
+        self.assertEqual(Property(4, 3, "Voltage", "uint16", "V").metric_name, "mijia_volts")
+        self.assertEqual(Property(5, 3, "Max Temperature", "float", "celsius").metric_name, "mijia_celsius_limit")
+
+    def test_limit_can_be_overridden_both_ways(self):
+        # 显式 limit=false：确属测量值、但名字里带 max/limit 这类词时用
+        p = Property(1, 1, "overvoltage-alarm", "uint16", "", limit_override=False)
+        self.assertEqual(p.metric_name, "mijia_volts")
+        # 显式 limit=true：名字看不出是阈值时用
+        p = Property(1, 2, "setting-a", "uint16", "volt", limit_override=True)
+        self.assertEqual(p.metric_name, "mijia_volts_limit")
+        # metric 覆盖优先于一切：连 _limit 后缀也不加，完全由配置决定
+        p = Property(1, 3, "overvoltage-alarm", "uint16", "", metric_override="volts")
+        self.assertEqual(p.metric_name, "mijia_volts")
+
     def test_missing_unit_falls_back_to_name(self):
         """实测：同一台 chuangmi 插座的规格里，power-consumption 单位写成 `none`、voltage 写成 `-`。"""
         self.assertEqual(Property(5, 1, "power-consumption", "uint32", "none").metric_name,

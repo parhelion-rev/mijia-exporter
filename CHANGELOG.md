@@ -7,6 +7,16 @@
 > 1.0.0 是首个公开发布版本。下面的「变更」与「修复」记录的是发布前开发过程中相对早期内部版本的变化，
 > 保留下来是为了说明现状是怎么来的，并非相对上一个公开版本的差异。
 
+## [Unreleased]
+
+### 修复
+
+- **阈值/门限属性不再混进测量指标族**。规格常不给门限属性单位（实测 `overvoltage-alarm`、
+  `undervoltage-alarm`、`overcurrent-alarm` 都没有），按名字兜底推断单位时会被当成电压/电流，
+  于是「过压门限 265 V」被 Grafana 画进了电压曲线。现在名字含 `alarm` / `limit` / `threshold` /
+  `max` / `min` 等词的属性单独成族（`mijia_volts_limit`、`mijia_amperes_limit`），
+  测量族保持干净；可用 `overrides` 的 `limit` 字段双向纠正，`metric` 字段优先级最高。
+
 ## [1.0.1] - 2026-10-10
 
 ### 新增

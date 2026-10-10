@@ -563,6 +563,7 @@ def manual_properties(cfg: DeviceConfig, legacy: bool) -> list[Property]:
             metric_override=sanitize(str(spec["metric"])) if spec.get("metric") else "",
             cumulative_override=bool(spec["cumulative"]) if spec.get("cumulative") is not None else None,
             scale_override=float(spec["scale"]) if spec.get("scale") is not None else None,
+            limit_override=bool(spec["limit"]) if spec.get("limit") is not None else None,
         ))
     return out
 
@@ -649,6 +650,9 @@ class Discoverer:
             prop.cumulative_override = bool(spec["cumulative"])
         if spec.get("scale") is not None:
             prop.scale_override = float(spec["scale"])
+        if spec.get("limit") is not None:
+            # 强制/取消按阈值处理（默认按属性名推断，例如 overvoltage-alarm）
+            prop.limit_override = bool(spec["limit"])
         return prop
 
     def finalize(self, transport: Transport, cfg: DeviceConfig, props: Iterable[Property],
