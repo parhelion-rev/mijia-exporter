@@ -61,3 +61,15 @@ groups:
         annotations:
           summary: "设备 {{ $labels.device }} 功率 {{ printf \"%.0f\" $value }} W，超过 3500 W 上限"
           description: "16A 插座的实际上限约为 3500 W，请检查负载是否正常。"
+
+      # 规格缓存目录不可写 → 规格查不到 → 指标名降级为 mijia_value/mijia_state，
+      # 面板整片变空（而容器健康检查仍是 healthy）。最常见原因是挂载目录属主与容器运行
+      # uid 不一致（Portainer 部署时按 root 创建目录）。修好后会自动恢复，不必重启。
+      - alert: MijiaSpecCacheNotWritable
+        expr: mijia_spec_cache_writable == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "规格缓存目录不可写，指标名已降级"
+          description: "检查 spec-cache 挂载目录的属主是否与容器运行 uid 一致（chown 后 exporter 会定期自动升级回规格模式）。"

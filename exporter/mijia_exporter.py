@@ -73,6 +73,8 @@ LEGACY_CANDIDATES = list(LEGACY_HINTS) + ["electric_current", "aqi", "pm2.5", "m
 MIOT_SCAN_SERVICES = range(1, 10)
 MIOT_SCAN_PROPERTIES = range(1, 13)
 BATCH_SIZE = 8
+# 退化为盲扫后，每隔这么久重试一次规格。会在轮询循环里顺带做，不需要重启容器。
+SPEC_RETRY_SECONDS = 600
 
 # ------------------------------------------------------------------ 指标定义
 PROPERTY_LABELS = ["device", "model", "property", "siid", "piid"]
@@ -82,6 +84,12 @@ DEVICE_READY = Gauge("mijia_device_ready", "该设备最近一次读取是否新
 DEVICE_CONFIGURED = Gauge("mijia_device_configured",
                           "该设备是否成功完成初始化/属性发现（1 成功 / 0 失败，失败原因见日志）", ["device"])
 DEVICE_PROPERTIES = Gauge("mijia_device_properties", "该设备发现到的可读属性个数", ["device"])
+DEVICE_SPEC_AVAILABLE = Gauge(
+    "mijia_spec_available",
+    "1 = 按 miot-spec 规格发现（指标名带单位，如 mijia_watts）；"
+    "0 = 退化为盲扫（指标名变成 mijia_value/mijia_state，面板会变空）",
+    ["device"],
+)
 LAST_SUCCESS = Gauge("mijia_last_success_timestamp_seconds",
                      "最近一次成功读取的 Unix 时间戳，用 time() 减它得到数据陈旧度", ["device"])
 POLL_DURATION = Gauge("mijia_poll_duration_seconds", "最近一次读取耗时", ["device"])
@@ -484,6 +492,15 @@ class MockTransport(Transport):
 
 
 # ------------------------------------------------------------------ 发现
+def spec_available(source: str) -> int:
+    """这次发现是否用上了 miot-spec 规格。
+
+    规格 / manual（用户显式指定）/ mock 都算正常；scan-* 表示退化为盲扫，
+    指标名会变成 mijia_value/mijia_state，面板会查不到数据。
+    """
+    return 0 if source in ("scan-miot", "scan-legacy") else 1
+
+
 def to_float(value: Any) -> float | None:
     if isinstance(value, bool):
         return 1.0 if value else 0.0
@@ -699,6 +716,7 @@ class DevicePoller(threading.Thread):
         self.properties: list[Property] = []
         self.legacy = False
         self.discovered = False
+        self._next_spec_retry = 0.0
         self.lock = threading.Lock()
         self.last_success: float | None = None
         self.last_error: str = ""
@@ -742,14 +760,51 @@ class DevicePoller(threading.Thread):
             mac=self.transport.mac, transport=self.transport.kind,
         ).set(1)
         DEVICE_PROPERTIES.labels(device=self.cfg.name).set(len(self.properties))
+        DEVICE_SPEC_AVAILABLE.labels(device=self.cfg.name).set(spec_available(discovery.source))
         LOG.info("[%s] 发现 %d 个属性（来源 %s，传输 %s）",
                  self.cfg.name, len(self.properties), discovery.source, self.transport.kind)
+        if not spec_available(discovery.source):
+            LOG.warning("[%s] 指标名已降级：本应使用规格（带单位）发现，实际退化为盲扫。"
+                        "检查 spec-cache 目录是否对运行 uid 可写、以及 miot-spec.org 是否可达；"
+                        "修好后无需重启，exporter 会定期自动重试并升级回规格模式。", self.cfg.name)
         return True
+
+    # -------------------------------------------------- 退化后的自动升级
+    def maybe_upgrade_discovery(self) -> None:
+        """退化为盲扫后定期重试规格，成功就地升级。
+
+        来自一个真实故障：spec-cache 在宿主上属主是 root、容器以 uid 1000 运行，规格文件
+        写不进去 → 退化成盲扫 → 指标名从 `mijia_watts` 变成 `mijia_value`，面板全空，
+        而容器健康检查一直是 healthy。运维修好目录权限后，如果还得重启容器才能恢复，
+        说明缺了自愈 —— 所以这里定期重试，不需要重启。
+        """
+        if self.cfg.discovery != "auto" or self.discovery is None or self.legacy:
+            return
+        if spec_available(self.discovery.source):
+            return
+        now = time.monotonic()
+        if now < self._next_spec_retry:
+            return
+        self._next_spec_retry = now + SPEC_RETRY_SECONDS
+        props = self.discoverer.store.spec_for_model(self.transport.model or self.cfg.model)
+        if not props:
+            return
+        upgraded = self.discoverer.finalize(self.transport, self.cfg, props, legacy=False)
+        if not upgraded:
+            return
+        with self.lock:
+            self.properties = upgraded
+            self.discovery = Discovery(upgraded, "spec", False)
+        DEVICE_PROPERTIES.labels(device=self.cfg.name).set(len(upgraded))
+        DEVICE_SPEC_AVAILABLE.labels(device=self.cfg.name).set(1)
+        LOG.info("[%s] 已从盲扫升级为按规格发现（%d 个属性），指标名恢复为带单位的形式",
+                 self.cfg.name, len(upgraded))
 
     # ------------------------------------------------------------ 一次轮询
     def poll_once(self) -> bool:
         if not self.ensure_ready():
             return False
+        self.maybe_upgrade_discovery()
         started = time.monotonic()
         try:
             if self.legacy:
@@ -925,11 +980,15 @@ class Handler(BaseHTTPRequestHandler):
     heartbeat: Heartbeat | None = None
 
     def _respond(self, code: int, content_type: str, body: bytes) -> None:
-        self.send_response(code)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # 健康检查会定期打 /ready，客户端可能先断开；这不该在日志里刷一堆堆栈
+            LOG.debug("客户端提前断开连接，忽略本次响应写入")
 
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0].rstrip("/") or "/"

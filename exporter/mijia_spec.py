@@ -22,7 +22,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from prometheus_client import Gauge
+
 LOG = logging.getLogger("mijia-exporter.spec")
+
+SPEC_CACHE_WRITABLE = Gauge(
+    "mijia_spec_cache_writable",
+    "规格缓存目录是否可写。为 0 时规格无法落盘 → 退化为盲扫 → 指标名降级为 "
+    "mijia_value/mijia_state，面板会查不到数据",
+)
 
 INSTANCES_URL = "https://miot-spec.org/miot-spec-v2/instances?status=all"
 INSTANCE_URL = "https://miot-spec.org/miot-spec-v2/instance?type={type}"
@@ -247,6 +255,39 @@ class SpecStore:
         self.ttl_seconds = max(0.0, ttl_hours) * 3600.0
         self.timeout = timeout
         self._index: dict[str, str] | None = None
+        self.check_writable()
+
+    # ------------------------------------------------------- 缓存目录可写性
+    def check_writable(self) -> bool:
+        """探测缓存目录是否可写，并把它暴露成指标。
+
+        这是踩过的真实故障：宿主上的挂载目录属主是 root、容器以非 root 运行，
+        规格文件写不进去 → 退化成盲扫 → 指标名从 `mijia_watts` 变成 `mijia_value`，
+        面板全空而容器健康检查依然是 healthy。所以要让它可告警。
+        """
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            probe = self.cache_dir / ".write-probe"
+            probe.write_text("", encoding="utf-8")
+            probe.unlink()
+        except Exception as exc:  # noqa: BLE001
+            SPEC_CACHE_WRITABLE.set(0)
+            LOG.warning("规格缓存目录不可写（%s）：%s。"
+                        "规格将无法落盘缓存：一旦 miot-spec.org 不可达就会退化为盲扫、指标名降级为 mijia_value/mijia_state；"
+                        "检查挂载目录属主是否与容器运行 uid 一致", self.cache_dir, exc)
+            return False
+        SPEC_CACHE_WRITABLE.set(1)
+        return True
+
+    def _write(self, path: Path, text: str) -> bool:
+        try:
+            path.write_text(text, encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("写入规格缓存失败（%s）：%s", path, exc)
+            self.check_writable()
+            return False
+        SPEC_CACHE_WRITABLE.set(1)
+        return True
 
     # ---------------------------------------------------------------- 索引
     @property
@@ -290,10 +331,9 @@ class SpecStore:
                 if current is None or (released, version) > (current[0], current[1]):
                     best[model] = (released, version, type_)
             models = {m: v[2] for m, v in best.items()}
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-            self.index_path.write_text(
+            self._write(
+                self.index_path,
                 json.dumps({"fetched_at": time.time(), "models": models}, ensure_ascii=False),
-                encoding="utf-8",
             )
             LOG.info("已更新规格索引：%d 个型号（缓存 %s）", len(models), self.index_path)
             self._index = models
@@ -329,8 +369,7 @@ class SpecStore:
 
         try:
             spec = self._fetch_json(INSTANCE_URL.format(type=spec_type))
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+            self._write(path, json.dumps(spec, ensure_ascii=False))
             LOG.info("已缓存 %s 的规格 → %s", model, path)
             return parse_instance(spec)
         except Exception as exc:  # noqa: BLE001

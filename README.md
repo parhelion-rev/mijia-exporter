@@ -78,6 +78,8 @@ make up        # 启动 exporter + Prometheus + Grafana
 | `mijia_last_success_timestamp_seconds{device}` | 上次成功读取时间，用 `time()` 减它得到陈旧度 |
 | `mijia_poll_duration_seconds{device}` | 单次读取耗时 |
 | `mijia_poll_errors_total{device,reason}` | 读取失败次数（按异常类型） |
+| `mijia_spec_available{device}` | 1 = 用了 miot-spec 规格（指标名带单位）；0 = 退化为盲扫（指标名降级） |
+| `mijia_spec_cache_writable` | 规格缓存目录是否可写；0 表示规格无法落盘，即将退化为盲扫 |
 | `mijia_build_info{version}` | exporter 版本 |
 
 读取失败时**不清空旧值**，只把 `mijia_device_ready` 置 0 并累加错误计数，避免出现「看起来正常、其实是陈数据」的假象。
@@ -216,6 +218,12 @@ MIoT 规格不提供内部系数，必须自己测。实测两台设备的原始
 - **备份**：配置与面板都是文件，可以入 git。TSDB 在 Docker 卷里，没有备份（家用指标通常可接受）。`exporter/spec-cache` 建议一起备份，否则新部署首跑依赖 miot-spec.org 在线。
 - **日志与容量**：三个容器都配了 `10m × 3` 的日志轮转，Prometheus 保留 90 天或 5GB（先到者生效）。
 - **容器权限**：exporter 以宿主 uid 运行（`make init` 写入 `.env`），Prometheus 以 `nobody`、Grafana 以 uid 472 运行，所以挂载进去的配置必须可读。`make init` 会统一 `chmod -R a+rX`。
+- **`spec-cache` 与 `auth` 目录必须对 exporter 的运行 uid 可写**。这两个目录是往里写的（规格缓存、登录态续期），不可写会导致规格无法落盘：一旦 miot-spec.org 临时不可达，就会退化为盲扫、指标名降级为 `mijia_value`，面板整片变空，而容器健康检查仍是 healthy。
+  在 Portainer 里用「栈」部署时，不存在的挂载源目录会由 Portainer 以 **root** 创建，于是容器里的非 root 用户写不进去：
+  ```bash
+  sudo chown -R 1000:1000 /opt/mijia/exporter/spec-cache /opt/mijia/auth   # uid 用 .env 里的 EXPORTER_UID
+  ```
+  改完**不需要重启容器**：exporter 每 10 分钟会重试一次规格并自动升级回带单位的指标名，`mijia_spec_available` 会从 0 变回 1。
 - **Docker Hub 拉不动**（国内网络常见 `authentication required`）：先拉镜像源再打回官方 tag，compose 不用改。
   ```bash
   docker pull docker.m.daocloud.io/prom/prometheus:v3.13.4
@@ -226,7 +234,7 @@ MIoT 规格不提供内部系数，必须自己测。实测两台设备的原始
 
 ### 告警规则
 
-`prometheus/rules/mijia.rules.yml` 里有 1 条记录规则与 5 条告警：
+`prometheus/rules/mijia.rules.yml` 里有 1 条记录规则与 6 条告警：
 
 | 名称 | 触发条件 |
 |---|---|
@@ -236,6 +244,7 @@ MIoT 规格不提供内部系数，必须自己测。实测两台设备的原始
 | `MijiaExporterDown` | Prometheus 抓取 exporter 失败 |
 | `MijiaPollErrors` | 近 30 分钟读取失败超过 5 次 |
 | `MijiaHighPower` | 功率超过 3500 W（16A 插座的实际上限） |
+| `MijiaSpecCacheNotWritable` | 规格缓存目录不可写，指标名已降级（面板会整片变空） |
 
 ## 排错：真机上踩过的坑
 
@@ -249,6 +258,7 @@ MIoT 规格不提供内部系数，必须自己测。实测两台设备的原始
 | Prometheus 反复 `exit 2`，`promtool check` 却是通过 | `rule_files` 通配符把同目录下的单测文件也扫了进去 | 单测放在 `prometheus/tests/`，通配符收紧为 `*.rules.yml` |
 | 容器报 `permission denied` 读不到配置 | 宿主 umask 077 让文件成了 600，而容器以非 root 运行 | 执行 `make init`（会统一放开读权限） |
 | `make once` 报 `unrecognized arguments` | `--entrypoint` 写在了镜像名之后，被当成容器命令 | 已修正；自定义命令时注意 `docker run [OPTIONS] IMAGE [COMMAND]` 的顺序 |
+| **Grafana 面板整片空白，但容器健康检查是 healthy** | 规格缓存目录不可写（挂载目录属主是 root，容器以非 root 运行）→ 规格查不到 → 退化为盲扫，指标名变成 `mijia_value`/`mijia_state`，面板查的 `mijia_watts` 根本不存在 | 看日志有没有「没有可用的规格…退化为盲扫」；`chown` 那两个目录即可。`MijiaSpecCacheNotWritable` 告警会直接指出这件事 |
 | 局域网扫描不到任何设备 | miIO 发现包必须是 32 字节，少一个字节设备就丢弃 | 内置客户端里是 `21310020` + 28 × `ff`；自建探测脚本时留意 |
 
 ## 常用查询
@@ -297,7 +307,7 @@ CI 会在每次 push 与 PR 上跑同一套，外加一次 mock 端到端冒烟�
 | 数据正确性 | 部分 | 控电仪四项系数有三条依据交叉验证；插座的功率系数用「超过自身量程即排除」反推，建议用一个已知功率的负载复核 |
 | 故障自愈 | 可以 | 惰性发现 + 每周期重试：开机时设备离线、临时读不通都能自己恢复，不用重启容器 |
 | 失败可观测 | 可以 | 6 个设备级指标覆盖「没采上」「数据过期」「反复失败」三种形态 |
-| 告警覆盖 | 可以 | 5 条告警 + 1 条记录规则，含「设备从未采上」这一盲区；11 个 promtool 用例守着 |
+| 告警覆盖 | 可以 | 6 条告警 + 1 条记录规则，含「设备从未采上」与「指标名降级」两个盲区；13 个 promtool 用例守着 |
 | 告警通知出口 | 需自配 | 默认不做任何外联。内置外部心跳（默认关闭）负责发现「监控自己死了」；通知投递自行选 Alertmanager 或 Grafana Contact points |
 | 磁盘增长 | 可以 | 日志轮转 10m × 3；单次成功读取记 DEBUG；TSDB 有 90 天 / 5GB 上限 |
 | 密钥管理 | 需自配 | `.env` 与 `auth/` 都是 600 且已 gitignore；Grafana 默认密码务必修改 |
@@ -343,7 +353,7 @@ mijia-exporter/
 │   └── Dockerfile
 ├── prometheus/
 │   ├── prometheus.yml           # 抓取配置，含 Home Assistant 备用方案
-│   ├── rules/mijia.rules.yml    # 1 条记录规则 + 5 条告警
+│   ├── rules/mijia.rules.yml    # 1 条记录规则 + 6 条告警
 │   └── tests/mijia.rules.test.yml   # 规则的 promtool 单测
 ├── grafana/
 │   ├── provisioning/            # 数据源与面板自动加载

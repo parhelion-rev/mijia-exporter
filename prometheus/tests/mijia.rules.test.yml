@@ -175,3 +175,28 @@ tests:
       - eval_time: 40m
         alertname: MijiaPollErrors
         exp_alerts: []
+
+  # 12) 规格缓存目录不可写 → 报警（指标名降级、面板会变空）
+  - interval: 1m
+    input_series:
+      - series: 'mijia_spec_cache_writable'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MijiaSpecCacheNotWritable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "规格缓存目录不可写，指标名已降级"
+              description: "检查 spec-cache 挂载目录的属主是否与容器运行 uid 一致（chown 后 exporter 会定期自动升级回规格模式）。"
+
+  # 13) 目录可写 → 不应报警
+  - interval: 1m
+    input_series:
+      - series: 'mijia_spec_cache_writable'
+        values: '1+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MijiaSpecCacheNotWritable
+        exp_alerts: []

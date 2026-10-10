@@ -347,6 +347,42 @@ class TestPoller(unittest.TestCase):
         lines = series(generate_latest(REGISTRY).decode())
         self.assertIn('mijia_poll_errors_total{device="dev",reason="discovery-RuntimeError"}', lines)
 
+    def test_degraded_discovery_upgrades_when_spec_appears(self):
+        """真实故障的回归用例：spec-cache 不可写 → 退化为盲扫 → 指标名降级、面板全空。
+
+        运维修好目录权限后，不应该还需要重启容器：轮询循环会定期重试规格并就地升级。
+        """
+        # 用 local 而不是 mock：mock 传输在 ensure_ready 里有短路分支，不走发现逻辑
+        cfg = device_cfg(transport="local", ip="192.168.1.50", token="a" * 32)
+        store = FakeStore([])                       # 起初没有规格，只能盲扫
+        transport = FakeTransport(cfg, miot={"3.3": 2262, "Voltage": 2262,
+                                             "Electric Power": 1747, "Valve Switch": True})
+        poller = mx.DevicePoller(cfg, transport, mx.Discoverer(store), mx.MetricSink(), threading.Event())
+        self.assertTrue(poller.poll_once())
+        self.assertEqual(poller.discovery.source, "scan-miot")
+        from prometheus_client import REGISTRY, generate_latest
+        self.assertIn('mijia_spec_available{device="dev"} 0.0', generate_latest(REGISTRY).decode())
+
+        store.props = list(SPEC_PROPS)              # 规格变可用（目录权限被修好）
+        poller._next_spec_retry = 0                 # 跳过 10 分钟重试间隔
+        self.assertTrue(poller.poll_once())
+        self.assertEqual(poller.discovery.source, "spec")
+        self.assertEqual(sorted(p.label for p in poller.properties),
+                         ["electric-power", "valve-switch", "voltage"])
+        self.assertIn('mijia_spec_available{device="dev"} 1.0', generate_latest(REGISTRY).decode())
+
+    def test_spec_available_is_1_for_manual_and_spec(self):
+        """manual 是用户有意为之，不该被当成降级。"""
+        cfg = device_cfg(transport="local", ip="192.168.1.50", token="a" * 32, discovery="manual",
+                         miot_props={"electric-power": {"siid": 3, "piid": 6, "unit": "watt"}})
+        transport = FakeTransport(cfg, miot={"electric-power": 100})
+        poller = mx.DevicePoller(cfg, transport, mx.Discoverer(FakeStore(SPEC_PROPS)),
+                                 mx.MetricSink(), threading.Event())
+        self.assertTrue(poller.poll_once())
+        self.assertTrue(poller.discovery.source.startswith("manual"))
+        from prometheus_client import REGISTRY, generate_latest
+        self.assertIn('mijia_spec_available{device="dev"} 1.0', generate_latest(REGISTRY).decode())
+
     def test_empty_result_is_an_error(self):
         poller, transport = self.make_poller()
         transport._miot = {}
