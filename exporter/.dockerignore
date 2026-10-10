@@ -1,0 +1,6 @@
+# 构建上下文里不需要进镜像的东西
+spec-cache/          # 规格缓存，运行时用卷挂载
+config.yaml          # 本机真实配置，运行时只读挂载
+config.example.yaml  # 模板，供人看，不需要进镜像
+__pycache__/
+*.pyc

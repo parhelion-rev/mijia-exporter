@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 构建镜像
+        run: make build
+
+      - name: 离线单测（41 个，不需要真机）
+        run: make test
+
+      - name: 告警规则单测（11 个用例，promtool）
+        run: make test-rules
+
+      # 测试用 mock 传输，不需要任何真实设备或登录态
+      - name: 端到端冒烟（mock 设备 + HTTP 端点）
+        run: |
+          cfg="$RUNNER_TEMP/ci-config.yaml"
+          cat > "$cfg" <<'YAML'
+          http_port: 9101
+          devices:
+            - name: ci-mock
+              transport: mock
+          YAML
+          # 容器以非 root 运行，配置必须可读；runner 的 umask 不一定是 022
+          chmod 644 "$cfg"
+          docker run --rm -d --name mijia-ci -p 19101:9101 \
+            -v "$cfg:/app/config.yaml:ro" \
+            mijia-exporter:1.0.0
+          ok=0
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:19101/ready >/dev/null 2>&1; then ok=1; break; fi
+            sleep 2
+          done
+          if [ "$ok" != 1 ]; then
+            echo "::error::exporter 未就绪，下面是容器日志"
+            docker logs mijia-ci
+            exit 1
+          fi
+          curl -sf http://127.0.0.1:19101/ | tee /dev/stderr | grep -q ci-mock
+          curl -sf http://127.0.0.1:19101/metrics | grep -q 'mijia_watts{'
+          docker rm -f mijia-ci
+
+      - name: 配置静态校验
+        run: |
+          python3 -m pip install --quiet pyyaml
+          make validate

@@ -1,0 +1,87 @@
+# 通用米家（MiJia）设备 → Prometheus exporter 配置
+#
+# 指标名由属性的**单位**推导，不写死 siid.piid，所以换设备不用改代码：
+#   单位 watt   → mijia_watts                单位 volt    → mijia_volts
+#   单位 ampere → mijia_amperes              单位 kwh     → mijia_kilowatt_hours_total（累计量）
+#   无单位 bool → mijia_state（1/0）          无单位数值  → mijia_value
+#   没见过的单位 → mijia_<单位 slug>（如 ug/m3 → mijia_micrograms_per_cubic_meter）
+# 每个属性指标都带标签：device / model / property / siid / piid
+# 设备级指标：mijia_device_info / mijia_device_ready / mijia_device_configured /
+#             mijia_device_properties / mijia_last_success_timestamp_seconds /
+#             mijia_poll_duration_seconds / mijia_poll_errors_total
+
+http_port: 9101
+poll_interval_seconds: 60      # 默认轮询间隔，每台设备可单独覆盖
+timeout_seconds: 8
+stale_after_seconds: 300       # 超过这么久没读到 → mijia_device_ready 变 0
+spec_cache_dir: spec-cache     # 规格缓存目录，可随镜像一起部署（见 exporter/mijia_spec.py）
+spec_cache_ttl_hours: 720
+
+# ------------------------------------------------------------------ 外部心跳
+# 默认关闭，且**不做任何外联** —— 要不要往外报、报给谁，由你自己决定。
+# 用途：Prometheus 自身发不出告警的场景（机器断电、Docker 挂了、磁盘满）。
+#   - Uptime Kuma：新建「Push」类型监控，它给的 Push URL 就是下面的 url
+#   - healthchecks.io：https://hc-ping.com/<uuid>
+# 不想用外部心跳也行：告警出口改用 Alertmanager，或用 Grafana 的 Contact points。
+heartbeat:
+  enabled: false
+  url: ""                      # 例如 https://hc-ping.com/xxxxxxxx-xxxx-xxxx
+  fail_url: ""                 # 可选：设备不健康时改推这个（healthchecks.io 支持 /<uuid>/fail）
+  interval_seconds: 300        # 推送间隔，别小于 10 秒
+  timeout_seconds: 10
+  method: GET                  # GET | POST
+  require_all_devices_ready: false
+  # ↑ false = 只报「exporter 进程还活着」（主机级死人开关）
+  #   true  = 任何一台设备不健康就不打点（或改推 fail_url），把设备故障也交给外部兜底
+
+devices:
+  # ---------------------------------------------------------------- 本地 miIO
+  # 最快最稳：局域网 UDP 54321 直连，需要 ip + token（make token 获取）
+  - name: home-meter           # 会作为 device 标签
+    transport: local
+    ip: ${XIAOMI_IP}
+    token: ${XIAOMI_TOKEN}
+    discovery: auto            # auto | spec | scan | manual
+    overrides:
+      # 原始值 × scale = 物理值。规格不提供内部系数，要用连续采样反推（见 README「校准」）。
+      voltage: {scale: 0.1}
+      electric-current: {scale: 0.01}
+      power-consumption: {scale: 0.01}
+
+  # ---------------------------------------------------------------- 云端读取
+  # 设备不在同一网段、或拿不到本地 token 时用。需要米家登录态：
+  #   1) make token 生成 .mijia-auth.json
+  #   2) 在 docker-compose.yml 里取消那行 auth 挂载的注释
+  # - name: doorlock
+  #   transport: cloud
+  #   model: loock.lock.t1     # 用 did 或 model 在账号里定位设备
+  #   poll_interval_seconds: 300   # 云端读一次更慢，覆盖全局的 60s
+
+  # ---------------------------------------------------------------- mock
+  # 不接真机也能验证整条链路（指标命名、抓取、面板）
+  # - name: demo
+  #   transport: mock
+
+# ---------------------------------------------------------------------------
+# overrides 的用法（键可以是 siid.piid、规格里的属性名、或它的 slug，大小写/空格不敏感）：
+#
+#   overrides:
+#     voltage:            {scale: 0.1}        # 系数修正
+#     electric-current:   {scale: 0.01}
+#     3.6:                {scale: 1}          # 也能直接用 siid.piid 指定
+#     pm2-5-density:      {name: pm25}        # 改 property 标签
+#     some-prop:          {metric: amperes}   # 规格单位标错时，直接指定指标族名
+#     another-prop:       {cumulative: true}  # 强制按累计量处理（加 _total 后缀）
+#
+# 不想要的属性：设备级写一行 `ignore: [device-fault, 4.6]`。
+#
+# 规格缺失或太离谱时的手工兜底（discovery: manual）：
+#   discovery: manual
+#   miot_props:                 # 走 get_properties
+#     electric-power: {siid: 3, piid: 6, unit: watt, scale: 1}
+#   legacy_props:               # 走旧版 get_prop（老固件设备）
+#     power: {prop: power, metric: watts, scale: 1}
+#
+# 设备对密集请求敏感时可以降低批次、加长间隔：
+#   batch_size: 4
+#   batch_delay_seconds: 0.3

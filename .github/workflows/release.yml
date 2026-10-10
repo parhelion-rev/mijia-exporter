@@ -1,0 +1,62 @@
+name: Release
+
+# 推一个 v* 标签即触发：构建 linux/amd64 + linux/arm64 双架构镜像，
+# 推到 Docker Hub，并生成 GitHub Release。
+#
+# 需要先在本仓库 Settings → Secrets and variables → Actions 里配置：
+#   DOCKERHUB_USERNAME  Docker Hub 用户名（effectwei）
+#   DOCKERHUB_TOKEN     Docker Hub 的 Access Token（不是登录密码）
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # 创建 GitHub Release
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析版本号（v1.0.0 → 1.0.0 与 1.0）
+        id: meta
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "minor=${version%.*}" >> "$GITHUB_OUTPUT"
+
+      - name: QEMU（arm64 模拟）
+        uses: docker/setup-qemu-action@v3
+
+      - name: Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 构建并推送（linux/amd64 + linux/arm64）
+        uses: docker/build-push-action@v6
+        with:
+          context: ./exporter
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            effectwei/mijia-exporter:${{ steps.meta.outputs.version }}
+            effectwei/mijia-exporter:${{ steps.meta.outputs.minor }}
+            effectwei/mijia-exporter:latest
+          labels: |
+            org.opencontainers.image.title=mijia-exporter
+            org.opencontainers.image.description=通用米家设备 → Prometheus exporter（多设备 / 本地+云端 / 自动发现）
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.source=https://github.com/parhelion-rev/mijia-exporter
+            org.opencontainers.image.documentation=https://github.com/parhelion-rev/mijia-exporter#readme
+
+      - name: 创建 GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes

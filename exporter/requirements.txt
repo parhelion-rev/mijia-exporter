@@ -1,0 +1,19 @@
+# 运行时依赖。每一条都是必需的 —— 加依赖前先问「能不能不加」。
+#
+# 刻意**不用 python-miio**：它只被用来做 miIO 协议收发，却带来
+# zeroconf（mDNS 发现）、netifaces（固件更新器用）、cryptography、construct、
+# croniter、tqdm、click 等一堆与「按 IP 读写属性」无关的包，
+# 而且 netifaces 没有 py3.12 wheel、必须在镜像里装 gcc。
+# 现在协议部分由 exporter/miio_client.py（约 200 行）自己实现。
+prometheus-client==0.26.0
+PyYAML==6.0.3
+
+# 云端传输 + 扫码取 token。mijiaAPI 本身**不在这里**：
+# 它由 Dockerfile 用 --no-deps 单独安装，因为它声明的 pillow 只为渲染二维码图片，
+# 而我们改用 qrcode 自带的纯 Python PNG 写入器（pypng）——省掉 20MB 的 pillow。
+# 下面几条就是 mijiaAPI 真正用到的依赖。
+pycryptodome==3.24.0
+qrcode==8.2
+pypng==0.20220715.0
+requests==2.34.2
+tzlocal==5.4.4

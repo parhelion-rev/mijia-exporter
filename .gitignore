@@ -1,0 +1,19 @@
+# 本机配置与凭据（绝对不要提交）
+.env
+exporter/config.yaml
+auth/
+
+# 运行时产物
+exporter/spec-cache/
+*.pyc
+__pycache__/
+.venv/
+.vemv/
+*.log
+
+# 扫码 / 校准过程中的中间产物
+.mijia-devices.json
+.mijia-qr.png*
+.captcha*
+.qr-*
+.hb-test/

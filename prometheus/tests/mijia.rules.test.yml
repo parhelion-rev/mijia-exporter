@@ -1,0 +1,177 @@
+# 告警规则单测：用 promtool 验证规则真的会按预期触发（不只是语法正确）。
+#
+# 运行（需要 promtool，或直接用官方镜像里的）：
+#   promtool test rules prometheus/tests/mijia.rules.test.yml
+#   docker run --rm -v "$PWD/prometheus":/p --entrypoint promtool \
+#     prom/prometheus:v3.13.4 test rules /p/tests/mijia.rules.test.yml
+#
+# 注意：
+#   · rule_files 是相对本测试文件所在目录解析的，所以这里写 ../rules/...
+#   · 这个文件刻意放在 tests/ 而不是 rules/ —— rules/ 会被 prometheus.yml 的
+#     rule_files 通配符整个扫一遍，混入测试文件会让 Prometheus 启动失败。
+#   · 关键：mock 时间轴下 time() 与 series 同步增长，用来构造"新鲜"这个负例。
+#   · 注解里的模板字符串必须与 ../rules/mijia.rules.yml 完全一致，promtool 逐字比对。
+
+rule_files:
+  - ../rules/mijia.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) 时间戳停在 0（很久以前）→ 必须触发"数据陈旧"
+  - interval: 1m
+    input_series:
+      - series: 'mijia_last_success_timestamp_seconds{device="zty2002"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MijiaDeviceStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              device: zty2002
+            exp_annotations:
+              summary: "设备 zty2002 已超过 10 分钟没有新数据"
+              description: "检查设备是否在线、token 是否失效、IP 是否变化，以及 exporter 容器日志。"
+
+  # 2) 时间戳与 time() 同步增长 → 数据新鲜，不应触发
+  - interval: 1m
+    input_series:
+      - series: 'mijia_last_success_timestamp_seconds{device="zty2002"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MijiaDeviceStale
+        exp_alerts: []
+
+  # 3) 完全没有序列（exporter 起来了但一次都没读成功）→ absent() 分支必须触发
+  - interval: 1m
+    input_series:
+      - series: 'mijia_watts{device="zty2002",model="demo"}'
+        values: '1+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MijiaDeviceStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              # 没有 device 标签时模板会渲染成双空格，这里如实断言
+              summary: "设备  已超过 10 分钟没有新数据"
+              description: "检查设备是否在线、token 是否失效、IP 是否变化，以及 exporter 容器日志。"
+
+  # 4) 4000W 持续 → 触发高功率告警
+  - interval: 1m
+    input_series:
+      - series: 'mijia_watts{device="zty2002",model="demo",property="electric-power",siid="3",piid="6"}'
+        values: '4000+0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MijiaHighPower
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              device: zty2002
+              model: demo
+              property: electric-power
+              siid: "3"
+              piid: "6"
+            exp_annotations:
+              summary: "设备 zty2002 功率 4000 W，超过 3500 W 上限"
+              description: "16A 插座的实际上限约为 3500 W，请检查负载是否正常。"
+
+  # 5) 2000W 正常负载 → 不应触发
+  - interval: 1m
+    input_series:
+      - series: 'mijia_watts{device="zty2002",model="demo",property="electric-power",siid="3",piid="6"}'
+        values: '2000+0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MijiaHighPower
+        exp_alerts: []
+
+  # 6) Prometheus 抓取失败 → 触发 exporter down
+  - interval: 1m
+    input_series:
+      - series: 'up{job="mijia",instance="exporter:9101"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MijiaExporterDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: mijia
+              instance: exporter:9101
+            exp_annotations:
+              summary: "Prometheus 抓取 exporter 失败"
+              description: "exporter 容器可能已退出，检查 docker compose logs exporter。"
+
+  # 7) 记录规则：累计电量在 1 天窗口内的增量。
+  #    increase() 会按采样间隔对窗口两侧做外推，所以这里让样本区间与窗口边界严格对齐
+  #    （0 → 24h），断言值才是确定的 1440。
+  - interval: 1m
+    input_series:
+      - series: 'mijia_kilowatt_hours_total{device="zty2002",model="demo"}'
+        values: '100+1x1440'
+    promql_expr_test:
+      - expr: mijia:energy_kwh:increase_1d
+        eval_time: 24h
+        exp_samples:
+          - labels: 'mijia:energy_kwh:increase_1d{device="zty2002",model="demo"}'
+            value: 1440
+
+  # 8) 设备从未采上（configured=0）必须报警。
+  #    这是 MijiaDeviceStale 覆盖不到的盲区：多设备下某台设备从未成功过时，
+  #    last_success 序列根本不存在，absent() 分支因"别的设备有数据"而不成立。
+  - interval: 1m
+    input_series:
+      - series: 'mijia_device_configured{device="lamp"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MijiaDeviceNotConfigured
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              device: lamp
+            exp_annotations:
+              summary: "设备 lamp 属性发现失败，没有在采集"
+              description: "具体原因见 exporter 日志：规格查不到、盲扫没命中、token 失效，或云端登录态缺失。"
+
+  # 9) 已正常配置的设备不应因此报警
+  - interval: 1m
+    input_series:
+      - series: 'mijia_device_configured{device="zty2002"}'
+        values: '1+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MijiaDeviceNotConfigured
+        exp_alerts: []
+
+  # 10) 半小时内读失败超过 5 次 → 报警（用 1 次/分钟的持续失败，30 分钟窗口内正好 30 次）
+  - interval: 1m
+    input_series:
+      - series: 'mijia_poll_errors_total{device="plug",reason="DeviceError"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MijiaPollErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              device: plug
+              reason: DeviceError
+            exp_annotations:
+              summary: "设备 plug 近 30 分钟读取失败 30 次（DeviceError）"
+              description: "常见原因：设备对密集请求敏感（调大 batch_delay_seconds），或网络不稳。详见 exporter 日志。"
+
+  # 11) 完全没有读失败 → 不报警
+  - interval: 1m
+    input_series:
+      - series: 'mijia_poll_errors_total{device="plug",reason="DeviceError"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MijiaPollErrors
+        exp_alerts: []

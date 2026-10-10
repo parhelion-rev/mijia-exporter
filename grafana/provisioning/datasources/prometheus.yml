@@ -1,0 +1,13 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # 与 prometheus.yml 的 scrape_interval 保持一致，Grafana 才能正确对齐步长
+      timeInterval: 60s

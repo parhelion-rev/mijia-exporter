@@ -1,0 +1,6 @@
+# 只有「不用 Docker、直接在本机跑工具脚本」时才需要装这些。
+#
+# probe.py / try_token.py 依赖 miio_client.py，而它只用 pycryptodome 做 AES
+# （AES 不在标准库里），其余都是标准库。mijia_token.py 另外还需要 mijiaAPI 及其依赖。
+# 直接用容器跑最省事：make token / make probe / make try-token（镜像里都装好了）。
+pycryptodome>=3.24

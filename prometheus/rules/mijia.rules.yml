@@ -1,0 +1,63 @@
+groups:
+  - name: mijia
+    rules:
+      # 近 24 小时用电量。累计电量是 counter 语义，必须用 increase()，不能取瞬时值。
+      - record: mijia:energy_kwh:increase_1d
+        expr: increase(mijia_kilowatt_hours_total[1d])
+
+      # 数据超过 10 分钟没更新：设备离线、token 失效、IP 变了，或被防火墙拦住。
+      # absent(...) 覆盖「exporter 起来了但一次都没读成功」的情况，此时该序列根本不存在。
+      - alert: MijiaDeviceStale
+        expr: absent(mijia_last_success_timestamp_seconds) or (time() - mijia_last_success_timestamp_seconds > 600)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "设备 {{ $labels.device }} 已超过 10 分钟没有新数据"
+          description: "检查设备是否在线、token 是否失效、IP 是否变化，以及 exporter 容器日志。"
+
+      # 抓取失败说明 exporter 自身出了问题（容器退出、端口不通），与设备侧无关，所以单独一条。
+      - alert: MijiaExporterDown
+        expr: up{job="mijia"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus 抓取 exporter 失败"
+          description: "exporter 容器可能已退出，检查 docker compose logs exporter。"
+
+      # 设备从未采上：属性发现失败（规格查不到、盲扫全空、token 失效、云端登录态缺失）。
+      # 这条不能省：上面 MijiaDeviceStale 的 absent() 分支只在「所有设备都没有数据」时成立，
+      # 多设备场景下某台设备从未成功过（它的 last_success 序列压根不存在）不会触发那条告警，
+      # 这正是最容易被长期忽略的盲区。
+      # for: 10m 用于避开 exporter 刚启动时短暂的 configured=0。
+      - alert: MijiaDeviceNotConfigured
+        expr: mijia_device_configured == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "设备 {{ $labels.device }} 属性发现失败，没有在采集"
+          description: "具体原因见 exporter 日志：规格查不到、盲扫没命中、token 失效，或云端登录态缺失。"
+
+      # 偶发读取失败是正常的（设备忙、Wi-Fi 抖动），半小时超过 5 次才说明有问题。
+      # 只看 increase，不看瞬时值，避免单次抖动就报。
+      - alert: MijiaPollErrors
+        expr: increase(mijia_poll_errors_total[30m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "设备 {{ $labels.device }} 近 30 分钟读取失败 {{ printf \"%.0f\" $value }} 次（{{ $labels.reason }}）"
+          description: "常见原因：设备对密集请求敏感（调大 batch_delay_seconds），或网络不稳。详见 exporter 日志。"
+
+      # 3500 W 是 16A / 220V 插座的实际上限。按 device 与 property 分别判断，
+      # 多设备或多个功率属性时不会互相掩盖。
+      - alert: MijiaHighPower
+        expr: mijia_watts > 3500
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "设备 {{ $labels.device }} 功率 {{ printf \"%.0f\" $value }} W，超过 3500 W 上限"
+          description: "16A 插座的实际上限约为 3500 W，请检查负载是否正常。"

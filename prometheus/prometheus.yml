@@ -1,0 +1,36 @@
+global:
+  # 家里几台设备，60 秒采一次完全够用，也顺便避开小米云与设备的限频。
+  # 注意要大于等于 exporter 的 poll_interval_seconds。
+  scrape_interval: 60s
+  scrape_timeout: 20s
+  evaluation_interval: 60s
+  external_labels:
+    monitor: mijia
+
+rule_files:
+  # 只吃 *.rules.yml：这个目录整个会被扫一遍，任何混进来的文件（比如 promtool 的测试
+  # 文件）都会让 Prometheus 启动失败（exit 2）。规则单测放在 prometheus/tests/。
+  - /etc/prometheus/rules/*.rules.yml
+
+scrape_configs:
+  - job_name: mijia
+    static_configs:
+      - targets:
+          - exporter:9101
+
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+
+  # ---------------------------------------------------------------------------
+  # 备用方案：设备只上报云端、本地协议不可用时，
+  # 用 Home Assistant（HACS 装 xiaomi_miot 集成）+ HA 自带的 Prometheus 集成，
+  # 让 Prometheus 直接抓 HA，不经过本项目的 exporter。
+  #
+  # - job_name: home-assistant
+  #   metrics_path: /api/prometheus
+  #   bearer_token: <HA 的长期访问令牌>
+  #   static_configs:
+  #     - targets:
+  #         - 192.168.1.10:8123
