@@ -43,7 +43,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, Counter, Gauge, gen
 from mijia_spec import Property, SpecStore, metric_family, sanitize, slug_label
 from miio_client import MiioDevice, MiioError
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 LOG = logging.getLogger("mijia-exporter")
 
 # 旧版（MIoT 之前）属性名 → 单位/格式/是否累计量。没有规格可用时靠这张表给出像样的指标名。

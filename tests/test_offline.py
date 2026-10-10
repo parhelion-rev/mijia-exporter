@@ -4,7 +4,7 @@
 运行：
     make test
     # 或者
-    docker run --rm -v "$PWD":/src -w /src --entrypoint python mijia-exporter:1.0.1 /src/tests/test_offline.py
+    docker run --rm -v "$PWD":/src -w /src --entrypoint python mijia-exporter:1.0.2 /src/tests/test_offline.py
 """
 
 from __future__ import annotations
@@ -687,7 +687,7 @@ class TestExposition(unittest.TestCase):
         self.assertIn('mijia_device_ready{device="expo"}', lines)
         self.assertIn('mijia_device_properties{device="expo"}', lines)
         self.assertIn('mijia_last_success_timestamp_seconds{device="expo"}', lines)
-        self.assertIn('mijia_build_info{version="1.0.1"}', lines)
+        self.assertIn('mijia_build_info{version="1.0.2"}', lines)
         self.assertTrue(any(x.startswith('mijia_device_info{device="expo"') for x in lines))
         # 累计量必须是「绝对值 gauge + `_total`」，不能用 Counter 的 inc 累加
         self.assertIn("# TYPE mijia_kilowatt_hours_total gauge", text)

@@ -6,9 +6,9 @@ services:
     build:
       context: ./exporter
     # 默认用本地构建的镜像。想直接用已发布的镜像（不本地构建）：
-    #   在 .env 里写 MIJIA_IMAGE=effectwei/mijia-exporter:1.0.1
+    #   在 .env 里写 MIJIA_IMAGE=effectwei/mijia-exporter:1.0.2
     #   然后 docker compose pull && docker compose up -d --no-build
-    image: ${MIJIA_IMAGE:-mijia-exporter:1.0.1}
+    image: ${MIJIA_IMAGE:-mijia-exporter:1.0.2}
     container_name: mijia-exporter
     restart: unless-stopped
     # 以宿主 uid 运行：挂载进来的 config.yaml / spec-cache 不会有属主与权限问题
