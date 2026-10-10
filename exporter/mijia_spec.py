@@ -115,9 +115,31 @@ def sanitize(text: str) -> str:
 
 
 def slug_label(text: str) -> str:
-    """属性名做成标签值：Electric Current → electric-current。"""
+    """把名字归一化成 ASCII slug，用于 overrides 的键匹配：Electric Current → electric-current。"""
     out = re.sub(r"[^0-9a-zA-Z]+", "-", text or "").strip("-").lower()
     return out or "unknown"
+
+
+def is_ascii(text: str) -> bool:
+    return all(ord(c) < 128 for c in text)
+
+
+def property_label(name: str) -> str:
+    """`property` 标签的值。
+
+    - 纯 ASCII 名字：归一化成 kebab（`Electric Current` → `electric-current`），
+      与历史行为一致，现有面板与查询不受影响。
+    - 含非 ASCII（规格里确实有中文描述，如 `耗电量`）：**保留原文**。
+      标签值允许任意 UTF-8，只有指标名才限定字符集；早期版本在这里套用了指标名的
+      字符规则，导致 `耗电量` 与 `耗电量本次计数` 一起塌缩成 `property="unknown"`，
+      两个属性无法区分。归一化不出来的名字返回空串，由调用方退回 `siid.piid`。
+    """
+    text = " ".join(str(name or "").split())
+    if not text:
+        return ""
+    if is_ascii(text):
+        return re.sub(r"[^0-9a-zA-Z]+", "-", text).strip("-").lower()
+    return text
 
 
 def hint_unit(name: str) -> tuple[str, bool]:
@@ -201,8 +223,8 @@ class Property:
 
     @property
     def label(self) -> str:
-        """property 标签值。规格没给名字的（常见于布尔开关）退回 siid.piid。"""
-        return slug_label(self.name) if self.name else self.address
+        """`property` 标签值。规格没给名字（或名字归一化后为空）时退回 siid.piid。"""
+        return property_label(self.name) or self.address
 
     @property
     def limit(self) -> bool:

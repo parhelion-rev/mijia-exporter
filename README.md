@@ -51,6 +51,26 @@ make up        # 启动 exporter + Prometheus + Grafana
 属性按**单位**归到不同指标族，不同单位绝不混进同一个指标。每个属性指标都带
 `device` / `model` / `property` / `siid` / `piid` 标签。
 
+`property` 的值来自规格里的属性描述，规则如下：
+
+| 规格里的名字 | `property` 取值 | 说明 |
+|---|---|---|
+| `Electric Power` | `electric-power` | 纯 ASCII 归一化成 kebab，与历史一致 |
+| `耗电量` | `耗电量` | 含非 ASCII 时**保留原文**：标签值允许任意 UTF-8，只有指标名才限定字符集 |
+| 空、或纯符号（如 `---`） | `3.6` | 退回 `siid.piid` |
+
+**各标签的稳定性不一样**，写长期面板时按这个挑：
+
+| 标签 | 稳定性 | 用途 |
+|---|---|---|
+| `device` / `siid` / `piid` | 稳定标识，跨规格版本不变 | 精确定位某个属性 |
+| `model` | 稳定，但换设备就不同 | 分组、对照规格 |
+| `property` | 派生自厂商文本：可能随规格更新而变化，也可能不唯一或退化成 `siid.piid` | 人读、跨型号查询常见英文名、作为 `overrides` 的键 |
+| 指标族名（如 `mijia_watts`） | 稳定，这就是对外 API | 所有查询的主干 |
+
+规律是：**指标族名由单位决定、稳定**；`property` 只是方便人读的附加信息，不该被当成稳定主键。
+需要长期稳定就用 `siid` / `piid`，或用 `overrides.name` 把标签值钉住。
+
 | 规格单位 | 指标族 | 说明 |
 |---|---|---|
 | `watt` / `W` | `mijia_watts` | 功率 |
@@ -119,7 +139,7 @@ devices:
 |---|---|
 | `scale` | 原始值 × scale = 物理值 |
 | `metric` | 直接指定指标族名（不含 `mijia_` 前缀），用于纠正规格里单位缺失或标错 |
-| `name` | 改 `property` 标签 |
+| `name` | 改 `property` 标签（规格文案变化时用它把标签值钉住） |
 | `unit` / `format` | 覆盖规格里的单位与格式 |
 | `cumulative` | 强制或取消按累计量处理（决定是否加 `_total` 后缀） |
 | `limit` | 强制/取消按阈值处理（阈值单独成族，如 `mijia_volts_limit`）；`metric` 优先级最高 |

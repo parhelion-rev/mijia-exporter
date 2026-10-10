@@ -125,6 +125,40 @@ class TestNaming(unittest.TestCase):
             with self.subTest(unit=unit, name=name):
                 self.assertEqual(Property(1, 1, name, fmt, unit).metric_name, expected)
 
+    def test_non_ascii_property_names_are_kept_verbatim(self):
+        """规格里确实有中文描述（小米空调的 耗电量 等）。标签值允许任意 UTF-8，
+        只有指标名限定字符集；早期实现套用了指标名的规则，导致 `耗电量` 与
+        `耗电量本次计数` 一起塌缩成 property="unknown"，同设备上无法区分。"""
+        a = Property(5, 1, "耗电量", "uint32", "kwh")
+        b = Property(5, 2, "耗电量本次计数", "uint32", "kwh")
+        self.assertEqual(a.label, "耗电量")
+        self.assertEqual(b.label, "耗电量本次计数")
+        self.assertNotEqual(a.label, b.label)
+        # 指标族仍由单位决定，中文名不影响
+        self.assertEqual(a.metric_name, "mijia_kilowatt_hours_total")
+
+    def test_ascii_property_labels_unchanged(self):
+        """ASCII 名字的标签值必须与历史一致，否则现有面板与告警会静默失效。"""
+        cases = {
+            "Electric Power": "electric-power",
+            "Electric Current": "electric-current",
+            "Power Consumption": "power-consumption",
+            "  Temperature  ": "temperature",
+            "iot-temp": "iot-temp",
+        }
+        for name, expected in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(Property(1, 1, name, "uint32", "watt").label, expected)
+
+    def test_unnamed_property_falls_back_to_address(self):
+        self.assertEqual(Property(4, 6, "", "bool", "").label, "4.6")
+        self.assertEqual(Property(4, 8, "---", "bool", "").label, "4.8")
+
+    def test_overrides_key_can_be_chinese(self):
+        cfg = device_cfg(overrides={"耗电量": {"scale": 0.01}})
+        prop = mx.Discoverer(FakeStore([]))._apply_overrides(cfg, Property(5, 1, "耗电量", "uint32", "kwh"))
+        self.assertAlmostEqual(prop.scale_override, 0.01)
+
     def test_limit_properties_get_their_own_family(self):
         """阈值/门限不能和测量值同族，否则面板会把「过压门限 265 V」画进电压曲线。
 

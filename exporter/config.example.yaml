@@ -50,6 +50,8 @@ devices:
       # 阈值/门限默认按属性名单独成族（如 mijia_volts_limit），不会混进电压曲线。
       # 判断错了可以纠正：确属测量值的用 limit: false；名字看不出是门限的用 limit: true。
       overvoltage-alarm: {scale: 1, limit: true}
+      # name: 改 property 标签的值；规格文案以后变了，用它把标签钉住，面板才不会跟着变
+      # 耗电量: {scale: 0.01, name: energy-today}   # 中文属性名同样可以当键
 
   # ---------------------------------------------------------------- 云端读取
   # 设备不在同一网段、或拿不到本地 token 时用。需要米家登录态：
